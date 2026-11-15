@@ -1,0 +1,219 @@
+# One pipeline for all Terraform.
+#   Pull request: CI jobs with the read-only CI identity. Merge only after they pass.
+#   Merge to main: a deployment request for the "production-demo" environment.
+#                  After the owner approves it, the read-write CD identity applies.
+# Same CI/CD design as the earlier projects. Terraform lives in infra/ (see the
+# README layout), so the Terraform jobs run there. Add the project's own TF_VAR_*
+# inputs (from GitHub variables/secrets) under env: as the resources are built.
+name: Terraform
+
+on:
+  # No path filter: "Terraform Plan Preview" is a required check on main, so
+  # every pull request must report it, even one that only changes docs. A
+  # "changes" job detects whether any .tf changed; on a docs-only PR the heavy
+  # steps (Checkov, plan) are skipped, but the checks still run and report
+  # success, so branch protection is satisfied without wasting minutes.
+  pull_request:
+    branches: [main]
+  # Only Terraform changes reach the apply job.
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_IN_AUTOMATION: "true"
+  ARM_USE_OIDC: "true"
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  BACKEND_CONFIG: >-
+    -backend-config=resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}
+    -backend-config=storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+    -backend-config=container_name=${{ vars.TFSTATE_CONTAINER }}
+  # TF_VAR_* project inputs go here, e.g.:
+  # TF_VAR_<name>: ${{ vars.<NAME> }}        # non-secret
+  # TF_VAR_<name>: ${{ secrets.<NAME> }}     # secret
+
+jobs:
+  changes:
+    name: "Detect Terraform changes"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      tf: ${{ steps.filter.outputs.tf }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        run: |
+          changed=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD)
+          if echo "$changed" | grep -qE '\.tf$|(^|/)\.terraform\.lock\.hcl$'; then
+            tf=true
+          else
+            tf=false
+          fi
+          echo "tf=$tf" >> "$GITHUB_OUTPUT"
+          echo "Terraform files changed: $tf"
+
+  fmt-and-validate:
+    name: "Terraform Format & Validate"
+    if: github.event_name == 'pull_request'
+    needs: changes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CI_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_CI_TENANT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        if: needs.changes.outputs.tf == 'true'
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        if: needs.changes.outputs.tf == 'true'
+        run: terraform init -input=false $BACKEND_CONFIG
+
+      - name: Terraform validate
+        if: needs.changes.outputs.tf == 'true'
+        run: terraform validate
+
+  checkov-scan:
+    name: "Pre-deployment Security Scan (Checkov)"
+    if: github.event_name == 'pull_request'
+    needs: changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Checkov
+        if: needs.changes.outputs.tf == 'true'
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra
+          framework: terraform,secrets
+          # AVM resources live inside registry modules; without this Checkov
+          # only sees the module call arguments.
+          download_external_modules: true
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          soft_fail: false
+          # Skipped checks, each with a reason:
+          # CKV_TF_1 - module sources are Terraform Registry versions, not git
+          #            commit hashes; the modules nested inside AVM cannot be
+          #            changed or skipped inline.
+          # By-design findings are skipped inline in the resource file, never by
+          # turning the scan off.
+          skip_check: CKV_TF_1
+
+      - name: Upload Checkov SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: (success() || failure()) && needs.changes.outputs.tf == 'true'
+        with:
+          sarif_file: checkov-results.sarif
+          category: checkov
+
+  secret-scan:
+    name: "Secret Scan (gitleaks)"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Scans the checked-out files (not just the PR diff), so secrets already
+      # in the repo are found too. Exit code 1 = leaks found.
+      - name: Run gitleaks on working tree
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.24.3 \
+            dir /repo --config /repo/.gitleaks.toml --redact --verbose
+
+  terraform-plan:
+    name: "Terraform Plan Preview"
+    needs: [changes, fmt-and-validate, checkov-scan, secret-scan]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    # Same group as apply, so plan and apply never contend for the state lock.
+    concurrency:
+      group: terraform
+      cancel-in-progress: false
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CI_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_CI_TENANT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: Terraform init
+        if: needs.changes.outputs.tf == 'true'
+        run: terraform init -input=false $BACKEND_CONFIG
+
+      - name: Terraform plan
+        if: needs.changes.outputs.tf == 'true'
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      - name: Plan to job summary
+        if: needs.changes.outputs.tf == 'true'
+        run: |
+          {
+            echo "### Terraform plan"
+            echo '```'
+            terraform show -no-color tfplan
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: No Terraform changes
+        if: needs.changes.outputs.tf != 'true'
+        run: echo "No Terraform changes in this PR - plan skipped." >> "$GITHUB_STEP_SUMMARY"
+
+  terraform-apply:
+    name: "Terraform Apply"
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # Manual approval gate: Required reviewers on this environment in GitHub.
+    # The CD identity's federated credential only matches this environment.
+    environment: production-demo
+    defaults:
+      run:
+        working-directory: infra
+    # Serialise runs against the same state; never cancel an in-flight apply.
+    concurrency:
+      group: terraform
+      cancel-in-progress: false
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CD_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_CD_TENANT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: terraform init -input=false $BACKEND_CONFIG
+
+      - name: Terraform apply
+        run: terraform apply -input=false -no-color -auto-approve
