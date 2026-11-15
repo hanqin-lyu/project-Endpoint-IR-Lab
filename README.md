@@ -64,3 +64,9 @@ report/         Post-Incident-Report-FIN042.md
   and C2 beaconing.
 - Defender for Servers instead of Microsoft 365 E5: E5 user licences do not cover servers,
   and the identity and email parts of E5 are out of scope.
+- Response order on a confirmed intrusion: scope first (which host, which account, what
+  ran), then isolate the device in Defender for Endpoint to stop lateral movement, then
+  forensics and remediation. Once an intrusion is confirmed, containment comes before
+  forensic completeness. The report's containment section records the isolation action
+  and its time. [placeholder — isolation timestamp and the MDE "Isolate device" record
+  from the real run.]
