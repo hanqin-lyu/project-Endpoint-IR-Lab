@@ -40,9 +40,10 @@ env:
     -backend-config=resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}
     -backend-config=storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}
     -backend-config=container_name=${{ vars.TFSTATE_CONTAINER }}
-  # TF_VAR_* project inputs go here, e.g.:
-  # TF_VAR_<name>: ${{ vars.<NAME> }}        # non-secret
-  # TF_VAR_<name>: ${{ secrets.<NAME> }}     # secret
+  # TF_VAR_* project inputs. Both are secrets (an IP and a password), so neither
+  # is written in the repo.
+  TF_VAR_management_source_cidr: ${{ secrets.MANAGEMENT_SOURCE_CIDR }}
+  TF_VAR_admin_password: ${{ secrets.ADMIN_PASSWORD }}
 
 jobs:
   changes:
