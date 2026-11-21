@@ -92,7 +92,8 @@ resource "azurerm_network_security_rule" "admin_rdp" {
 # ---------------------------------------------------------------------------
 # Windows Server 2022 with a local admin account. Defender for Endpoint (via
 # Defender for Servers Plan 1) and Invoke-AtomicRedTeam are set up on the VM by
-# hand, not in Terraform. 2022 is the minimum for MDE live response.
+# hand, not in Terraform. 2022 supports MDE live response out of the box
+# (2019 needs an update, 2016/2012 R2 the Unified Agent).
 module "vm" {
   source  = "Azure/avm-res-compute-virtualmachine/azurerm"
   version = "0.21.0"
@@ -102,8 +103,9 @@ module "vm" {
   resource_group_name = data.azurerm_resource_group.lab.name
   os_type             = "Windows"
   # 2 vCPU, 4 GB. Enough to run the attack chain; the VM is deallocated when
-  # not in use and the resource group is destroyed at the end.
-  sku_size         = "Standard_B2s"
+  # not in use and the resource group is destroyed at the end. Standard_B2s
+  # was refused in australiaeast (SkuNotAvailable, capacity), so B-series v2.
+  sku_size         = "Standard_B2als_v2"
   enable_telemetry = false
 
   # One VM, no need to pin an availability zone.
