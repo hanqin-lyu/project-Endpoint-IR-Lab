@@ -1,0 +1,46 @@
+// Scope check for IR-2026-FIN042: did the incident's accounts or files appear on any other device?
+// This is the correlation the incident graph does for you, written out as a query.
+//
+// Tables and fields:
+//   AlertEvidence       - AlertId, EntityType, AccountName, SHA1, DeviceName, Timestamp
+//   DeviceLogonEvents   - AccountName, DeviceName, ActionType, LogonType, RemoteIP, Timestamp
+//   DeviceProcessEvents - SHA1, DeviceName, AccountName, FileName, ProcessCommandLine, Timestamp
+//
+// Fill in the incident's alert IDs from the real run before running.
+let lookback = 7d;
+let incidentAlerts = dynamic(["[placeholder-alert-id]"]);
+let evidence = AlertEvidence
+    | where Timestamp > ago(lookback)
+    | where AlertId in (incidentAlerts);
+// Accounts and file hashes named in the alert evidence
+let accounts = evidence
+    | where EntityType == "User" and isnotempty(AccountName)
+    | distinct AccountName;
+let hashes = evidence
+    | where EntityType in ("File", "Process") and isnotempty(SHA1)
+    | distinct SHA1;
+// Devices already in the incident
+let incidentDevices = evidence
+    | where isnotempty(DeviceName)
+    | distinct DeviceName;
+union
+    (
+    DeviceLogonEvents
+    | where Timestamp > ago(lookback)
+    | where ActionType == "LogonSuccess"
+    | where AccountName in~ (accounts)
+    | project Timestamp, Source = "Logon", DeviceName, AccountName,
+        Detail = strcat(LogonType, " from ", RemoteIP)
+    ),
+    (
+    DeviceProcessEvents
+    | where Timestamp > ago(lookback)
+    | where SHA1 in (hashes)
+    | project Timestamp, Source = "Process", DeviceName, AccountName,
+        Detail = strcat(FileName, " ", ProcessCommandLine)
+    )
+// OtherDevice = true means activity outside the incident: scope is wider than one host
+| extend OtherDevice = DeviceName !in~ (incidentDevices)
+| summarize Events = count(), FirstSeen = min(Timestamp), LastSeen = max(Timestamp)
+    by DeviceName, OtherDevice, Source
+| order by OtherDevice desc, FirstSeen asc
