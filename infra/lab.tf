@@ -160,6 +160,28 @@ module "vm" {
 }
 
 # ---------------------------------------------------------------------------
+# Defender for Servers Plan 1 (this VM only)
+# ---------------------------------------------------------------------------
+# Plan 1 is enabled at the resource level, so the subscription stays on Free
+# and no other machine is billed. The subscription's Endpoint protection
+# (WDATP) setting is already on, so Defender for Cloud then installs the
+# MDE.Windows extension and onboards the VM to Defender for Endpoint.
+# Destroy deletes this setting and the VM falls back to the subscription's
+# Free tier.
+resource "azapi_resource" "defender_servers_p1" {
+  type      = "Microsoft.Security/pricings@2024-01-01"
+  name      = "virtualMachines"
+  parent_id = module.vm.resource_id
+
+  body = {
+    properties = {
+      pricingTier = "Standard"
+      subPlan     = "P1"
+    }
+  }
+}
+
+# ---------------------------------------------------------------------------
 # Auto-shutdown
 # ---------------------------------------------------------------------------
 # Deallocates the VM every evening so a forgotten VM does not bill overnight.

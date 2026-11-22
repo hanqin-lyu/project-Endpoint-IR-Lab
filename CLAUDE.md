@@ -22,7 +22,8 @@ Status: planning. Nothing is built yet.
 - Scope is the four-step chain in the README. No M365 identity work, no SOAR, no C2.
 - Every cost decision favours zero ingestion: raw events stay in Defender advanced hunting, not Sentinel.
 - No variables, options or files "for later". If a value is not set by the owner, hard-code it.
-- Terraform only covers the VM, network and auto-shutdown. The resource group and the
+- Terraform only covers the VM, network, auto-shutdown and Defender for Servers Plan 1
+  on that VM (resource level, subscription stays Free). The resource group and the
   budget alert are created by hand (same split as project-Sentinel-SOC), so the pipeline
   needs no subscription-level rights.
 - ITSM is one incident ticket raised by hand in a free ServiceNow developer instance, the
