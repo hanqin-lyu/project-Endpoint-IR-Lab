@@ -122,3 +122,12 @@ report/         Post-Incident-Report-FIN042.md
   Cloud's `mdeOnboardings` API. The extension is outside Terraform and goes with the VM
   on `terraform destroy`. It ships in its own
   PR because merging it starts the plan's 30-day trial, which cannot be paused.
+- Automated remediation is set to "Semi - approval required for all folders" for the lab
+  VM, through its own device group (`lab-edr-ir`, matched on the device name). The
+  tenant default for ungrouped devices is Full, which would let automated investigation
+  delete the payload or the scheduled task before I collect them. The other Semi levels
+  only hold back system folders or non-temp folders, and the step-1 payload likely lands
+  in a user or temp folder. With approval required for every folder, automated
+  investigation still runs and proposes actions, and I approve or reject each one in the
+  Action center; those decisions go into the walkthrough. The device group is set by hand
+  in the Defender portal, not in Terraform.
