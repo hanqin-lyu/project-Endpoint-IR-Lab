@@ -116,6 +116,9 @@ report/         Post-Incident-Report-FIN042.md
   machines in the subscription stay on Free and are not billed. The setting always exists
   on a VM (it reads back as the inherited Free tier), so Terraform updates it rather than
   creating it; `terraform destroy` deletes the VM and the setting with it. The
-  subscription's existing Endpoint protection setting then installs `MDE.Windows` and
-  onboards the VM to Defender for Endpoint. It ships in its own
+  subscription's existing Endpoint protection setting would install `MDE.Windows` on
+  its own, but the first push can take up to 12 hours, so I installed the extension by
+  hand with `az vm extension set`, using the onboarding package from Defender for
+  Cloud's `mdeOnboardings` API. The extension is outside Terraform and goes with the VM
+  on `terraform destroy`. It ships in its own
   PR because merging it starts the plan's 30-day trial, which cannot be paused.
