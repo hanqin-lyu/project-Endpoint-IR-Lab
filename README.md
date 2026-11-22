@@ -113,7 +113,9 @@ report/         Post-Incident-Report-FIN042.md
   keep ingestion cost at zero. The ticket stays out of Terraform and CI.
 - Defender for Servers Plan 1 is turned on for the lab VM only, at the resource level
   (`Microsoft.Security/pricings` on the VM, in Terraform), not for the subscription. Other
-  machines in the subscription stay on Free and are not billed, and `terraform destroy`
-  removes the setting. The subscription's existing Endpoint protection setting then
-  installs `MDE.Windows` and onboards the VM to Defender for Endpoint. It ships in its own
+  machines in the subscription stay on Free and are not billed. The setting always exists
+  on a VM (it reads back as the inherited Free tier), so Terraform updates it rather than
+  creating it; `terraform destroy` deletes the VM and the setting with it. The
+  subscription's existing Endpoint protection setting then installs `MDE.Windows` and
+  onboards the VM to Defender for Endpoint. It ships in its own
   PR because merging it starts the plan's 30-day trial, which cannot be paused.

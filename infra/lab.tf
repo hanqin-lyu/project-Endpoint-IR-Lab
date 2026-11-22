@@ -166,9 +166,11 @@ module "vm" {
 # and no other machine is billed. The subscription's Endpoint protection
 # (WDATP) setting is already on, so Defender for Cloud then installs the
 # MDE.Windows extension and onboards the VM to Defender for Endpoint.
-# Destroy deletes this setting and the VM falls back to the subscription's
-# Free tier.
-resource "azapi_resource" "defender_servers_p1" {
+# azapi_update_resource, not azapi_resource: the VM-level pricing always
+# exists (it reads back as the inherited Free tier), so a create fails with
+# "Resource already exists". Removing this block does not set the VM back to
+# Free; `terraform destroy` deletes the VM, and the setting goes with it.
+resource "azapi_update_resource" "defender_servers_p1" {
   type      = "Microsoft.Security/pricings@2024-01-01"
   name      = "virtualMachines"
   parent_id = module.vm.resource_id
