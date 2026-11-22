@@ -111,3 +111,9 @@ report/         Post-Incident-Report-FIN042.md
   way as the Sentinel SOC baseline. Automatic alert-to-ticket creation is out of scope: it
   would need a log hub (Sentinel) to push alerts, which this project deliberately avoids to
   keep ingestion cost at zero. The ticket stays out of Terraform and CI.
+- Defender for Servers Plan 1 is turned on for the lab VM only, at the resource level
+  (`Microsoft.Security/pricings` on the VM, in Terraform), not for the subscription. Other
+  machines in the subscription stay on Free and are not billed, and `terraform destroy`
+  removes the setting. The subscription's existing Endpoint protection setting then
+  installs `MDE.Windows` and onboards the VM to Defender for Endpoint. It ships in its own
+  PR because merging it starts the plan's 30-day trial, which cannot be paused.
