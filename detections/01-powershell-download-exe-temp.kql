@@ -1,0 +1,41 @@
+// Rule 1: PowerShell writes an .exe into a user Temp folder (step 1, T1059.001)
+//
+// Why: step 1 (payload download and start, 2026-11-24 05:31:10 UTC) raised no
+// built-in alert. This rule covers that gap.
+//
+// Tables and fields:
+//   DeviceFileEvents    - ActionType, FileName, FolderPath, SHA256, InitiatingProcessFileName,
+//                         InitiatingProcessCommandLine, InitiatingProcessAccountName,
+//                         InitiatingProcessAccountSid, DeviceId, ReportId, Timestamp
+//   DeviceProcessEvents - SHA256, FolderPath, DeviceId, Timestamp (only to show whether it ran)
+// Verified against real data (hunting run, 2026-11-24): one row, update-svc.exe at
+// 05:31:11 UTC, Ran = true. The writing process was
+// "powershell.exe" -NoProfile -EncodedCommand [base64], so the rule also catches
+// encoded commands: it does not read the command text.
+//
+// Fires on the file write alone. MDE does not record every process start on this
+// host, so the rule does not depend on the process event; Ran is context only.
+//
+// Impacted entities: Device = DeviceId, User = InitiatingProcessAccountSid.
+// Evidence: File = SHA256 / FolderPath.
+//
+// Likely false positives: admin scripts or installers that download an .exe with
+// PowerShell into Temp (for example package bootstrap scripts). Tune by excluding
+// known SHA256 values or signed publishers, not by folder.
+let window = 1d;
+let created = DeviceFileEvents
+    | where Timestamp > ago(window)
+    | where ActionType == "FileCreated"
+    | where InitiatingProcessFileName in~ ("powershell.exe", "pwsh.exe")
+    | where FileName endswith ".exe"
+    | where FolderPath has @"\AppData\Local\Temp\";
+let started = DeviceProcessEvents
+    | where Timestamp > ago(window)
+    | where FolderPath has @"\AppData\Local\Temp\"
+    | summarize FirstRun = min(Timestamp) by DeviceId, SHA256;
+created
+| join kind=leftouter started on DeviceId, SHA256
+| extend Ran = isnotempty(FirstRun)
+| project Timestamp, ReportId, DeviceId, DeviceName, FileName, FolderPath, SHA256,
+    InitiatingProcessAccountName, InitiatingProcessAccountSid,
+    InitiatingProcessFileName, InitiatingProcessCommandLine, Ran, FirstRun

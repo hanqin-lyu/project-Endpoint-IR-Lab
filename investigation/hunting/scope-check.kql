@@ -2,45 +2,63 @@
 // This is the correlation the incident graph does for you, written out as a query.
 //
 // Tables and fields:
-//   AlertEvidence       - AlertId, EntityType, AccountName, SHA1, DeviceName, Timestamp
-//   DeviceLogonEvents   - AccountName, DeviceName, ActionType, LogonType, RemoteIP, Timestamp
-//   DeviceProcessEvents - SHA1, DeviceName, AccountName, FileName, ProcessCommandLine, Timestamp
+//   AlertEvidence       - AlertId, EntityType, AccountSid, SHA1, SHA256, DeviceName, Timestamp
+//   DeviceLogonEvents   - AccountSid, DeviceName, ActionType, LogonType, Timestamp
+//   DeviceProcessEvents - SHA1, SHA256, DeviceName, AccountName, Timestamp
+//   DeviceFileEvents    - SHA1, SHA256, DeviceName, ActionType, Timestamp
 //
-// Fill in the incident's alert IDs from the real run before running.
-let lookback = 7d;
-let incidentAlerts = dynamic(["[placeholder-alert-id]"]);
+// Incident alerts: every alert with evidence on vm-ir-lab-01 in the attack window
+// (2026-11-24 04:30-07:00 UTC). Advanced hunting has no incident ID column, and incident 15
+// holds every alert raised on this device in that window, so the device and window stand in
+// for the incident's alert ID list.
+//
+// Accounts match on SID, not name: iradmin is a local account (RID 500), so another VM
+// can have its own iradmin with a different SID. Hashes match SHA1 or SHA256, because
+// custom rules 1 and 4 map SHA256 only.
+//
+// Search window: from the attack to now (advanced hunting keeps 30 days).
+// RemoteIP is left out on purpose: it is the owner's public IP.
+let attackStart = datetime(2026-11-24 04:30);
+let attackEnd = datetime(2026-11-24 07:00);
+let incidentDevice = "vm-ir-lab-01";
+let incidentAlerts = AlertEvidence
+    | where Timestamp between (attackStart .. attackEnd)
+    | where DeviceName =~ incidentDevice
+    | distinct AlertId;
 let evidence = AlertEvidence
-    | where Timestamp > ago(lookback)
+    | where Timestamp between (attackStart .. attackEnd)
     | where AlertId in (incidentAlerts);
-// Accounts and file hashes named in the alert evidence
 let accounts = evidence
-    | where EntityType == "User" and isnotempty(AccountName)
-    | distinct AccountName;
-let hashes = evidence
+    | where EntityType == "User" and isnotempty(AccountSid)
+    | distinct AccountSid;
+let sha1s = evidence
     | where EntityType in ("File", "Process") and isnotempty(SHA1)
     | distinct SHA1;
-// Devices already in the incident
-let incidentDevices = evidence
-    | where isnotempty(DeviceName)
-    | distinct DeviceName;
+let sha256s = evidence
+    | where EntityType in ("File", "Process") and isnotempty(SHA256)
+    | distinct SHA256;
 union
     (
     DeviceLogonEvents
-    | where Timestamp > ago(lookback)
+    | where Timestamp > attackStart
     | where ActionType == "LogonSuccess"
-    | where AccountName in~ (accounts)
-    | project Timestamp, Source = "Logon", DeviceName, AccountName,
-        Detail = strcat(LogonType, " from ", RemoteIP)
+    | where AccountSid in (accounts)
+    | project Timestamp, Source = strcat("Logon ", LogonType), DeviceName
     ),
     (
     DeviceProcessEvents
-    | where Timestamp > ago(lookback)
-    | where SHA1 in (hashes)
-    | project Timestamp, Source = "Process", DeviceName, AccountName,
-        Detail = strcat(FileName, " ", ProcessCommandLine)
+    | where Timestamp > attackStart
+    | where SHA1 in (sha1s) or SHA256 in (sha256s)
+    | project Timestamp, Source = "Process", DeviceName
+    ),
+    (
+    DeviceFileEvents
+    | where Timestamp > attackStart
+    | where SHA1 in (sha1s) or SHA256 in (sha256s)
+    | project Timestamp, Source = strcat("File ", ActionType), DeviceName
     )
 // OtherDevice = true means activity outside the incident: scope is wider than one host
-| extend OtherDevice = DeviceName !in~ (incidentDevices)
+| extend OtherDevice = DeviceName !~ incidentDevice
 | summarize Events = count(), FirstSeen = min(Timestamp), LastSeen = max(Timestamp)
     by DeviceName, OtherDevice, Source
 | order by OtherDevice desc, FirstSeen asc

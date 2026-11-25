@@ -1,0 +1,38 @@
+// Rule 3: new local user and add to Administrators with net.exe / net1.exe (step 3, T1136.001)
+//
+// Tables and fields:
+//   DeviceProcessEvents - FileName, ProcessCommandLine, InitiatingProcessFileName,
+//                         AccountName, AccountSid, DeviceId, ReportId, Timestamp
+// Verified against real data (05:52:17 UTC): net.exe and net1.exe with "user /add" and
+// "localgroup administrators "T1136.001_Admin" /add", parent cmd.exe, account iradmin.
+//
+// Why process events: the first DeviceEvents search (2026-11-24) showed no
+// UserAccountCreated or UserAccountAddedToLocalGroup events. Corrected 2026-11-25: an
+// account-scoped search found them at 05:52:17 UTC. The rule stays on process events
+// (verified); an account-event version would also catch New-LocalUser.
+// Note: MDE masks the argument after "user /add" as **********, so the new account
+// name comes from the localgroup command line.
+//
+// Impacted entities: Device = DeviceId, User = AccountSid.
+// Evidence: Process = ProcessCommandLine.
+//
+// Likely false positives: admins adding local admins by hand. On a lab server with one
+// admin, any hit is worth a look. Misses PowerShell New-LocalUser / Add-LocalGroupMember.
+//
+// Tuning (2026-11-25): the first version returned one row per process, so one
+// admin-add (net + net1, twice) raised 4 alerts. Rows are now collapsed to one per
+// device, account and 5-minute window. See README.md, Tuning notes.
+let window = 1d;
+DeviceProcessEvents
+| where Timestamp > ago(window)
+| where FileName in~ ("net.exe", "net1.exe")
+| where (ProcessCommandLine has "user" and ProcessCommandLine has "/add")
+    or (ProcessCommandLine has "localgroup" and ProcessCommandLine has "administrators"
+        and ProcessCommandLine has "/add")
+| extend Window = bin(Timestamp, 5m)
+| summarize arg_min(Timestamp, ReportId, DeviceName, AccountName, FileName,
+        InitiatingProcessFileName),
+    Commands = make_set(ProcessCommandLine), Events = count()
+    by DeviceId, AccountSid, Window
+| project Timestamp, ReportId, DeviceId, DeviceName, AccountName, AccountSid,
+    FileName, InitiatingProcessFileName, Events, Commands

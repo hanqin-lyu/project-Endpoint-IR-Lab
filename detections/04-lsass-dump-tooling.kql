@@ -1,0 +1,42 @@
+// Rule 4: LSASS dump attempt with comsvcs.dll MiniDump or ProcDump (step 4, T1003.001)
+//
+// Tables and fields:
+//   DeviceProcessEvents - FileName, ProcessCommandLine, InitiatingProcessFileName,
+//                         AccountName, AccountSid, DeviceId, ReportId, Timestamp
+//   DeviceFileEvents    - ActionType, FileName, FolderPath, SHA256,
+//                         InitiatingProcessAccountName, InitiatingProcessAccountSid,
+//                         DeviceId, ReportId, Timestamp
+//
+// Real run: both attempts (06:02:42 and 06:26:32 UTC) were blocked by Defender AV
+// before the dump process started, so there is no dump process event to match.
+// Branch A is therefore not verified against real data (0 rows in the hunting run).
+// Branch B verified (hunting run, 2026-11-24): 3 rows at 06:26:26 UTC, procdump.exe
+// (two copies) and procdump64.exe under C:\AtomicRedTeam\ExternalPayloads\, account
+// iradmin. Branch B flags the tool arriving, not the dump itself. Defender's own AV
+// alerts cover the blocked dump attempts.
+//
+// Impacted entities: Device = DeviceId, User = AccountSid.
+// Evidence: Process = ProcessCommandLine, File = SHA256.
+//
+// Likely false positives: support staff collecting crash dumps with ProcDump on a
+// server. Branch A (lsass in the command line) should be rare.
+let window = 1d;
+union
+    (
+    DeviceProcessEvents
+    | where Timestamp > ago(window)
+    | where ProcessCommandLine has "lsass" or ProcessCommandLine has "MiniDump"
+    | where (FileName =~ "rundll32.exe" and ProcessCommandLine has "comsvcs")
+        or (FileName in~ ("procdump.exe", "procdump64.exe") and ProcessCommandLine has "lsass")
+    | project Timestamp, ReportId, DeviceId, DeviceName, AccountName, AccountSid,
+        Branch = "A: dump command", Detail = ProcessCommandLine, SHA256
+    ),
+    (
+    DeviceFileEvents
+    | where Timestamp > ago(window)
+    | where ActionType == "FileCreated"
+    | where FileName in~ ("procdump.exe", "procdump64.exe")
+    | project Timestamp, ReportId, DeviceId, DeviceName,
+        AccountName = InitiatingProcessAccountName, AccountSid = InitiatingProcessAccountSid,
+        Branch = "B: procdump written", Detail = FolderPath, SHA256
+    )

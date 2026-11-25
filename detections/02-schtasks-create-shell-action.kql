@@ -1,0 +1,26 @@
+// Rule 2: schtasks /create with a shell or user-folder action, started from a shell (step 2, T1053.005)
+//
+// Tables and fields:
+//   DeviceProcessEvents - FileName, ProcessCommandLine, InitiatingProcessFileName,
+//                         InitiatingProcessParentFileName, AccountName, AccountSid,
+//                         DeviceId, ReportId, Timestamp
+// Seen in alert evidence (05:45:33 UTC): powershell.exe -> "cmd.exe" /c SCHTASKS /Create
+// /SC ONCE /TN spawn /TR C:\windows\system32\cmd.exe /ST 20:10 -> schtasks.exe.
+// Verified in DeviceProcessEvents (hunting run, 2026-11-24): one row, 05:45:32 UTC,
+// schtasks.exe, parent cmd.exe, grandparent powershell.exe, account iradmin.
+//
+// Impacted entities: Device = DeviceId, User = AccountSid.
+// Evidence: Process = ProcessCommandLine.
+//
+// Likely false positives: admin scripts that create tasks with schtasks.exe and a
+// cmd/powershell action. Most installers use the Task Scheduler API, not schtasks.exe.
+let window = 1d;
+DeviceProcessEvents
+| where Timestamp > ago(window)
+| where FileName =~ "schtasks.exe"
+| where ProcessCommandLine has "/create"
+| where InitiatingProcessFileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe")
+| where ProcessCommandLine has_any ("cmd.exe", "powershell", "pwsh", "rundll32",
+    @"\AppData\", @"\Temp\", @"\Users\Public\")
+| project Timestamp, ReportId, DeviceId, DeviceName, AccountName, AccountSid,
+    ProcessCommandLine, InitiatingProcessFileName, InitiatingProcessParentFileName
