@@ -12,15 +12,20 @@
     Invoke-AtomicRedTeam installed and imported, atomics folder present.
     https://github.com/redcanaryco/invoke-atomicredteam
 
-  Each step is pinned to an Atomic test by number. The numbers are left UNSET on
-  purpose: choose them in phase 1 after checking the real telemetry (confirm the
-  event names and join fields against DeviceProcessEvents / DeviceEvents first),
-  then fill in $Steps below. The script refuses to run until every number is set.
+  Steps 2-4 are pinned to library Atomic tests by number, left UNSET on purpose:
+  choose them in phase 1 after checking the real telemetry (confirm the event names
+  and join fields against DeviceProcessEvents / DeviceEvents first), then fill in
+  $Steps below. The script refuses to run until every number is set.
 
-  Step 1 MUST drop a PE payload (.exe / .dll). Its SHA256 becomes the block
-  indicator in the response phase, so a .ps1-only test will not do. If the test
-  you pick writes only a script, switch to one that drops a PE, or substitute a
-  harmless stand-in PE.
+  Step 1 is a custom atomic authored in this repo (.\atomics\T1059.001), because no
+  stock T1059.001 test does encoded-PowerShell -> download -> land a PE and run it.
+  It drops a HARMLESS stub PE whose SHA256 becomes the block indicator in the
+  response phase. Before the first run:
+    1. Build the stub:  .\payload-stub\build-stub.ps1   (prints its SHA256)
+    2. Host stub.exe where the VM can reach it over the network.
+    3. Set payload_url in .\atomics\T1059.001\T1059.001.yaml to that URL.
+  Copy this whole simulation\ folder to the VM so .\atomics and .\payload-stub come
+  with the script.
 
   Step 4 dumps LSASS with a living-off-the-land tool, never mimikatz.exe (see the
   note on the step below). Record which method you used in simulation-log.md.
@@ -52,44 +57,54 @@ $Steps = @(
         Name        = '1. Encoded PowerShell, download and execute'
         Technique   = 'T1059.001'
         Tables      = 'DeviceProcessEvents, DeviceNetworkEvents'
-        TestNumbers = $null   # [placeholder] cradle test #9, payload URL -> harmless PE (see note)
+        TestNumbers = @(1)                              # custom test, authored in .\atomics
+        AtomicsPath = (Join-Path $PSScriptRoot 'atomics')
         Note        = @'
-Entry point. Use download-cradle test #9 with its payload URL pointed at a HARMLESS
-PE, so this step pulls an .exe over the network and lands it on disk. That PE's
-SHA256 is the step-6 block-and-remediate indicator (kept in step 1). The PE must be
-not-known-bad (blocked later only because we add its hash by hand), land on disk
-(not memory-only), and come over a real network cradle. Details in simulation-log.md.
+Entry point. Custom atomic (.\atomics\T1059.001\T1059.001.yaml), not a stock number:
+no stock T1059.001 test does encoded-PowerShell -> download -> land a PE and run it.
+It downloads a HARMLESS stub PE (payload-stub\stub.cs, built by payload-stub\
+build-stub.ps1) over the network and runs it. Before running: build the stub, host
+it where the VM can reach it, and set payload_url in the yaml. The stub's SHA256 is
+the step-6 block-and-remediate indicator (kept in step 1). Details in simulation-log.md.
 '@
     },
     @{
         Name        = '2. Scheduled task persistence'
         Technique   = 'T1053.005'
         Tables      = 'DeviceProcessEvents, DeviceEvents'
-        TestNumbers = $null   # [placeholder]
+        TestNumbers = @(2)    # #2 "Scheduled task Local", verified 2026-11-24 (task "spawn")
         Note        = ''
     },
     @{
         Name        = '3. New local administrator account'
         Technique   = 'T1136.001'
         Tables      = 'DeviceEvents, DeviceProcessEvents'
-        TestNumbers = $null   # [placeholder] create account AND add to Administrators
+        TestNumbers = @(8)    # #8 "Create a new Windows admin user", verified 2026-11-24 (account T1136.001_Admin)
         Note        = 'Create the local account and add it to the Administrators group.'
     },
     @{
         Name        = '4. LSASS memory dump, living-off-the-land'
         Technique   = 'T1003.001'
         Tables      = 'DeviceEvents, Defender alerts'
-        TestNumbers = $null   # [placeholder] pick the LotL variant, never the mimikatz one
+        TestNumbers = @(2)    # #2 "comsvcs.dll" LotL, verified 2026-11-24 - PREVENTED at launch (see note + log)
         Note        = @'
-LotL only, no mimikatz.exe on disk. Pick ONE and record it in the log:
-  a) rundll32.exe comsvcs.dll, MiniDump <lsass_pid> dump.bin full   (built in)
-  b) procdump -ma lsass.exe out.dmp                                 (Sysinternals, signed, dual-use)
-  c) PowerShell calling MiniDumpWriteDump
-Why LotL: mimikatz has a strong static signature and is quarantined before it
-reads LSASS, so it only tests "AV blocked a known-bad file", not the behavioural
-detection of abnormal LSASS handle access (PROCESS_VM_READ) - the credential-theft
-signal this lab investigates, and where the PIR timeline starts. The step-4 tooling
-(rundll32 / comsvcs.dll / procdump) is deliberately NOT blocked by hash later.
+Credential-access stage, LotL only, no mimikatz.exe on disk.
+Real outcome on this VM (2026-11-24): the LSASS dump is PREVENTED at process launch.
+Both #2 comsvcs.dll (built-in) and #1 procdump (signed) returned "Access is denied"
+at CreateProcess, so rundll32 / procdump never ran and no dump was produced. This is
+the RECORDED result: credential theft ATTEMPTED and PREVENTED - a prevented step is
+still part of the chain and the same incident, not a missing step.
+Blocker: Defender behavioural / command-line AV protection in block mode. NOT ASR
+(rules empty) and NOT isolation (device stayed online). Confirmed by
+Get-MpThreatDetection: ThreatID 2147793100, command-line behaviour detection on the
+comsvcs dump command.
+Detection signal lives in the AV detection / Defender alert, NOT DeviceProcessEvents
+(the blocked process generated no process line). Expected on re-run: "Access is
+denied" - that is the result, not a failure.
+Why LotL, not mimikatz: mimikatz is a known-bad FILE quarantined on disk (only tests
+"AV blocked a known file"); comsvcs/procdump are built-in/signed, so the block here
+is behavioural credential-theft prevention - the stronger result. The step-4 tooling
+is deliberately never added to a block-by-hash indicator later (a PIR point).
 '@
     }
 )
@@ -119,6 +134,15 @@ function Assert-AtomicModule {
         exit 1
     }
 }
+
+# Splat for Invoke-AtomicTest. A step may carry AtomicsPath to run a custom atomic
+# from this repo (step 1) instead of the default library folder.
+function Get-AtomicArgs {
+    param([hashtable]$Step)
+    $a = @{ TestNumbers = $Step.TestNumbers }
+    if ($Step.AtomicsPath) { $a['PathToAtomicsFolder'] = $Step.AtomicsPath }
+    return $a
+}
 # ---------------------------------------------------------------------------
 
 Assert-AtomicModule
@@ -129,7 +153,8 @@ if ($Cleanup) {
     for ($i = $Steps.Count - 1; $i -ge 0; $i--) {
         $s = $Steps[$i]
         Write-Step "Cleanup $($s.Name) [$($s.Technique)]"
-        Invoke-AtomicTest $s.Technique -TestNumbers $s.TestNumbers -Cleanup
+        $a = Get-AtomicArgs $s
+        Invoke-AtomicTest $s.Technique @a -Cleanup
     }
     Write-Step 'Cleanup done. Confirm the VM is back to a clean state before the next run.'
     return
@@ -139,7 +164,8 @@ if ($CheckPrereqs) {
     Write-Step 'Checking and installing prerequisites for every step.'
     foreach ($s in $Steps) {
         Write-Step "Prereqs $($s.Name) [$($s.Technique)]"
-        Invoke-AtomicTest $s.Technique -TestNumbers $s.TestNumbers -GetPrereqs
+        $a = Get-AtomicArgs $s
+        Invoke-AtomicTest $s.Technique @a -GetPrereqs
     }
     Write-Step 'Prereq check done.'
     return
@@ -148,7 +174,8 @@ if ($CheckPrereqs) {
 Write-Step 'Starting attack chain IR-2026-FIN042 (lab only).'
 foreach ($s in $Steps) {
     Write-Step "START  $($s.Name) [$($s.Technique)]  tables: $($s.Tables)"
-    Invoke-AtomicTest $s.Technique -TestNumbers $s.TestNumbers
+    $a = Get-AtomicArgs $s
+    Invoke-AtomicTest $s.Technique @a
     Write-Step "DONE   $($s.Name)"
 }
 Write-Step 'Chain complete. Record timestamps and screenshots in simulation-log.md.'
