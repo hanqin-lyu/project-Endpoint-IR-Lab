@@ -57,6 +57,8 @@ practises those two things.
 
 ```text
 infra/          Terraform (lab VM, Defender for Servers setting)
+simulation/     attack chain: run-chain.ps1, custom T1059.001 atomic, payload stub source,
+                SETUP.md and the real run log (simulation-log.md)
 detections/     4 KQL rules, verification and tuning notes (README.md)
 investigation/  walkthrough, response record, baseline and post-attack live response,
                 disk preservation, scope query (hunting/), screenshots
