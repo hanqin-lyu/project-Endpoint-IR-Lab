@@ -4,8 +4,10 @@ One Windows Server in Azure with Microsoft Defender for Endpoint. I run a four-s
 intrusion against it with Atomic Red Team, write my own detections, then investigate
 it starting from the alert only and write it up as a client-facing post-incident report.
 
-Status: the run is complete (attack 2026-11-24, response 2026-11-25). The lab is pending
-teardown.
+Status: the run is complete (attack 2026-11-24, response 2026-11-25). The lab was torn
+down on 2026-11-25: the destroy workflow removed all 9 Terraform resources (the VM and
+its Defender for Servers setting with it), and the evidence snapshot, which is outside
+Terraform state, was deleted by hand.
 
 > The client and case ID (IR-2026-FIN042) are fictional. All telemetry, timestamps and
 > screenshots come from my own lab machine. No synthetic logs.
